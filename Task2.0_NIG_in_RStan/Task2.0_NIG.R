@@ -10,7 +10,7 @@ set.seed(123456)
 N <- 10000
 B0 <- 0.5 # same as Task1
 alpha0 <- 6 # choose a value greater than 4
-beta0 <- 25
+delta0 <- 25
 mu0 <- 3
 
 g <- rgamma(1, shape=alpha0/2, rate=delta0/2) 
@@ -24,7 +24,7 @@ data_list<- list(
   y=y,
   B0=B0,
   alpha0=alpha0,
-  beta0=beta0,
+  delta0=delta0,
   mu0=mu0
 )
 
