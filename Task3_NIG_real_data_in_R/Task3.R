@@ -87,8 +87,8 @@ makeCombined <- function(){
 }
 
 comb.s <- makeCombined()
-write.csv(comb.s, "C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task3_NIG_real_data_in_R/comb.s.csv", row.names = FALSE)
-real_data <- read.csv("C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task3_NIG_real_data_in_R/comb.s.csv")
+write.csv(comb.s, "C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task3_NIG_real_in_R/comb.s.csv", row.names = FALSE)
+real_data <- read.csv("C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task3_NIG_real_in_R/comb.s.csv")
 
 set.seed(123456)
 # define real data function
