@@ -122,7 +122,7 @@ run_NIG_real <- function(data, party, year, stan_file) {
 
 # run stan
 library(rstan)
-fit <- run_NIG_real (real_data, "ALP", 2019, "/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task4.2_NIG_real_in_Rstan_u0~U(0.4, 0.6)/Task4.2.stann")
+fit <- run_NIG_real (real_data, "ALP", 2019, "/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task4.2_NIG_real_in_Rstan_u0~U(0.4, 0.6)/Task4.2.stan")
 print(fit)
 
 fit2 <- run_NIG_real (real_data, "LNP", 2016, "/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task4.2_NIG_real_in_Rstan_u0~U(0.4, 0.6)/Task4.2.stan")
