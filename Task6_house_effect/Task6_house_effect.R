@@ -38,10 +38,10 @@ run_NIG_house_effect <- function(data, party, year, start_date, end_date, stan_f
     seed = 123456
   )
   
-  return(fit)
+  return(list(fit = fit, filtered_data = filtered_data))
 }
 
-house_summary <- function(fit, data) {
+house_summary <- function(fit, filtered_data) {
   samples <- rstan::extract(fit)
   
   # alpha
@@ -58,8 +58,17 @@ house_summary <- function(fit, data) {
       q05 = quantile(x, 0.05), q95 = quantile(x, 0.95))
   }) %>%
     t() %>%
-    as.data.frame() %>%
-    mutate(pollster = levels(factor(data$pollster))[sort(unique(data$j))])
+    as.data.frame()
+  
+  colnames(delta_summary) <- c("mean", "sd", "q05", "q95")
+  
+  
+  pollster_levels <- levels(factor(filtered_data$pollster))
+  pollster_index <- sort(unique(filtered_data$j))
+  delta_summary <- delta_summary %>%
+    mutate(pollster = pollster_levels[pollster_index])
+  
+    #mutate(pollster = levels(factor(data$pollster))[sort(unique(data$j))])
     #mutate(pollster = sort(unique(data$pollster)))  # restore name
   
   return(list(
@@ -70,7 +79,7 @@ house_summary <- function(fit, data) {
 
 library(rstan)
 
-fit <- run_NIG_house_effect(
+result <- run_NIG_house_effect(
   data = real_data,
   party = "ALP",
   year = 2019,
@@ -79,31 +88,38 @@ fit <- run_NIG_house_effect(
   stan_file = "/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task6_house_effect/Task6.stan"
 )
 
-samples <- rstan::extract(fit)
+fit <- result$fit
+filtered_data <- result$filtered_data
+summary_list <- house_summary(fit, filtered_data)
 
-# --- alpha  ---
-alpha_mean <- mean(samples$alpha)
-alpha_sd <- sd(samples$alpha)
-alpha_var <- var(samples$alpha)
-alpha_q05 <- quantile(samples$alpha, 0.05)
-alpha_q95 <- quantile(samples$alpha, 0.95)
 
-cat("==== ALP Posterior Summary ====\n")
-cat(sprintf("Alpha:\n  Mean = %.4f\n  SD = %.4f\n  Variance = %.4f\n  5%% CI = %.4f\n  95%% CI = %.4f\n\n",
-            alpha_mean, alpha_sd, alpha_var, alpha_q05, alpha_q95))
+library(ggplot2)
 
-# --- delta (house effects) ---
-pollsters <- levels(factor(filtered_data$pollster))[sort(unique(filtered_data$j))]
-delta_summary <- data.frame(
-  pollster = pollsters,
-  mean = apply(samples$delta, 2, mean),
-  sd = apply(samples$delta, 2, sd),
-  q05 = apply(samples$delta, 2, function(x) quantile(x, 0.05)),
-  q95 = apply(samples$delta, 2, function(x) quantile(x, 0.95))
-)
+actual_ALP <- 0.3334
+alpha_mean <- summary_list$alpha$mean
+delta_summary <- summary_list$delta
 
-delta_summary_rounded <- delta_summary %>%
-  mutate(across(c(mean, sd, q05, q95), ~ round(.x, 4)))
+# 计算每个 pollster 对 ALP 的估计
+delta_summary <- delta_summary %>%
+  mutate(
+    est_support = alpha_mean + mean,
+    q05_support = alpha_mean + q05,
+    q95_support = alpha_mean + q95
+  ) %>%
+  arrange(est_support) %>%
+  mutate(pollster = factor(pollster, levels = pollster))  # 固定顺序
 
-cat("==== House Effects (delta) Summary ====\n")
-print(delta_summary_rounded)
+
+ggplot(delta_summary, aes(x = pollster, y = est_support, color = pollster)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = q05_support, ymax = q95_support), width = 0.2) +
+  geom_hline(yintercept = actual_ALP, linetype = "dashed", color = "black") +
+  annotate("text", x = 0.5, y = actual_ALP + 0.01, label = "Actual ALP vote", hjust = 0, size = 3.5) +
+  theme_minimal() +
+  labs(
+    title = "Estimated ALP Support by Pollster (with House Effects)",
+    y = "Estimated ALP Support",
+    x = "Pollster"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = "none")
