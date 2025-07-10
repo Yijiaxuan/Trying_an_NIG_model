@@ -99,7 +99,7 @@ actual_ALP <- 0.3334
 alpha_mean <- summary_list$alpha$mean
 delta_summary <- summary_list$delta
 
-# 计算每个 pollster 对 ALP 的估计
+# calculate each pollster's estimate for ALP
 delta_summary <- delta_summary %>%
   mutate(
     est_support = alpha_mean + mean,
@@ -107,7 +107,7 @@ delta_summary <- delta_summary %>%
     q95_support = alpha_mean + q95
   ) %>%
   arrange(est_support) %>%
-  mutate(pollster = factor(pollster, levels = pollster))  # 固定顺序
+  mutate(pollster = factor(pollster, levels = pollster)) 
 
 
 ggplot(delta_summary, aes(x = pollster, y = est_support, color = pollster)) +
