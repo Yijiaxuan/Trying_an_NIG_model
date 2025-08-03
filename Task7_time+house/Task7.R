@@ -1,0 +1,167 @@
+real_data <- read.csv("C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task4.2_NIG_real_in_Rstan_u0~U(0.4, 0.6)/comb.s.csv")
+
+run_NIG_trend_house <- function(data, party, year, start_date, end_date, stan_file) {
+  library(dplyr)
+  library(lubridate)
+  library(rstan)
+  
+  
+  filtered_data <- data %>%
+    filter(what == party) %>%
+    mutate(mid_date = ymd(mid_date)) %>%
+    filter(mid_date >= start_date & mid_date <= end_date) %>%
+    filter(!is.na(y)) %>%
+    mutate(
+      y = y / 100, 
+      day = as.numeric(difftime(mid_date, start_date, units = "days")) + 1,
+      j = as.integer(factor(pollster))  # house index
+    )
+  
+  if (nrow(filtered_data) == 0) {
+    stop("No valid polling data for given party and year.")
+  }
+  
+  
+  data_list <- list(
+    NPOLLS = nrow(filtered_data),
+    NDAYS = as.numeric(difftime(end_date, start_date, units = "days")) + 1,
+    NHOUSES = length(unique(filtered_data$j)),
+    y = filtered_data$y,
+    day = filtered_data$day,
+    j = filtered_data$j,
+    prevElectionResult = 0.3473,
+    B0 = 0.5,
+    alpha0 = 6,
+    beta0 = 16, #25
+    tau_upper = 0.3
+  )
+  
+ 
+  fit <- stan(
+    file = stan_file,
+    data = data_list,
+    iter = 6500,
+    warmup = 1500,
+    chains = 4,
+    seed = 123456
+  )
+  
+  return(list(fit = fit, filtered_data = filtered_data))
+}
+
+library(rstan)
+result <- run_NIG_trend_house(
+  data = real_data,
+  party = "ALP",
+  year = 2019,
+  start_date = as.Date("2016-07-02"),
+  end_date = as.Date("2019-05-18"),
+  stan_file = "/Documents and Settings/16438/Desktop/Reaserch Project/Trying NIG model/Task7_time+house/Task7.stan"
+)
+
+fit <- result$fit
+filtered_data <- result$filtered_data
+
+
+library(rstan)
+library(dplyr)
+library(tibble)
+library(lubridate)
+
+xi_summary <- function(fit, start_date) {
+  xi_samples <- rstan::extract(fit)$xi  # [iterations, NDAYS]
+  
+  xi_df <- apply(xi_samples, 2, function(x) {
+    tibble(
+      mean = mean(x),
+      q05 = quantile(x, 0.05),
+      q95 = quantile(x, 0.95)
+    )
+  }) %>%
+    bind_rows() %>%
+    mutate(
+      day = 1:n(),
+      date = start_date + days(day - 1)
+    )
+  
+  return(xi_df)
+}
+
+xi_df <- xi_summary(fit, start_date = as.Date("2016-07-02"))
+
+library(ggplot2)
+ggplot() +
+  #posterior mean of xi
+  #geom_ribbon(data = xi_df, aes(x = date, ymin = q05, ymax = q95), fill = "grey80", alpha = 0.5)
+
+  geom_line(data = xi_df, aes(x = date, y = mean), color = "black", size = 1) +
+  
+  
+  geom_point(data = filtered_data, aes(x = mid_date, y = y, color = pollster), size = 2, alpha = 0.9) +
+  
+  
+  geom_hline(yintercept = 0.3334, linetype = "dashed", color = "red") +
+  annotate("text", x = min(filtered_data$mid_date), y = 0.3434,
+           label = "Actual ALP vote", hjust = 0, size = 3.5, color = "red") +
+  
+  labs(
+    title = "Estimated Time Trend of ALP Support",
+    x = "Date",
+    y = "Vote Share",
+    color = "Pollster"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+# house effect
+delta_samples <- rstan::extract(fit)$delta  # [iterations, NHOUSES]
+
+delta_summary <- apply(delta_samples, 2, function(x) {
+  tibble(
+    mean = mean(x),
+    sd = sd(x),
+    q05 = quantile(x, 0.05),
+    q95 = quantile(x, 0.95)
+  )
+}) %>%
+  bind_rows()
+
+pollster_levels <- levels(factor(filtered_data$pollster))
+pollster_index <- sort(unique(filtered_data$j))
+delta_summary <- delta_summary %>%
+  mutate(pollster = pollster_levels[pollster_index]) %>%
+  arrange(mean) %>%
+  mutate(pollster = factor(pollster, levels = pollster))  
+
+poll_data <- filtered_data %>%
+  select(pollster, y, j) %>%
+  mutate(pollster = factor(pollster, levels = delta_summary$pollster))
+
+library(ggplot2)
+ggplot() +
+  
+  geom_point(data = delta_summary, aes(x = pollster, y = mean), size = 3, color = "blue") +
+  geom_errorbar(data = delta_summary,
+                aes(x = pollster, ymin = q05, ymax = q95),
+                width = 0.2, color = "blue") +
+  
+ 
+  geom_jitter(data = poll_data,
+              aes(x = pollster, y = y - mean(filtered_data$y), color = pollster),
+              width = 0.15, height = 0, alpha = 0.6, size = 2) +
+  
+ 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  
+  labs(
+    title = "House Effects by Pollster (with Observed Poll Deviations)",
+    x = "Pollster",
+    y = "Deviation from Average Support",
+    color = "Pollster"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(color = "none")
