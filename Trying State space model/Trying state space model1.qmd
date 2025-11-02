@@ -1,0 +1,303 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(lubridate)
+  library(rstan)
+  library(tibble)
+})
+
+.make_discontinuity <- function(date_seq, break_dates = NULL) {
+  ND <- length(date_seq)
+  if (is.null(break_dates) || length(break_dates) == 0) {
+    return(list(NBREAKS = 0L, discontinuity = rep(0L, ND)))
+  }
+  # ensure Date
+  break_dates <- as.Date(break_dates)
+  idx <- match(break_dates, date_seq)
+  idx <- idx[!is.na(idx)]
+  disc <- rep(0L, ND)
+  if (length(idx) > 0) {
+    # label as 1..K (multiple jumps supported)
+    for (k in seq_along(idx)) disc[idx[k]] <- as.integer(k)
+  }
+  list(NBREAKS = as.integer(max(disc)), discontinuity = as.integer(disc))
+}
+
+
+.detect_jump_dates <- function(start_date, end_date, jump_csv = NULL) {
+  if (is.null(jump_csv) || !file.exists(jump_csv)) return(NULL)
+  df <- tryCatch(read.csv(jump_csv, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (is.null(df)) return(NULL)
+
+  # try to find a jump date column robustly
+  jd_col <- c("jump.date", "jump_date", "jump", "jumpDay", "jumpday")
+  jd_col <- jd_col[jd_col %in% names(df)]
+  if (length(jd_col) == 0) return(NULL)
+
+  # parse and keep those within [start_date, end_date]
+  jump_dates <- suppressWarnings(as.Date(df[[jd_col[1]]]))
+  jump_dates <- jump_dates[!is.na(jump_dates)]
+  jump_dates <- sort(unique(jump_dates[jump_dates >= start_date & jump_dates <= end_date]))
+
+  if (length(jump_dates) == 0) return(NULL)
+  jump_dates
+}
+
+
+run_NIG_trend_house <- function(
+    data, party, year, start_date, end_date,
+    stan_file,
+    break_dates = NULL,          
+    fallback_sigma = 0.02,      
+    jump_csv = NULL              
+) {
+
+  filtered_data <- data %>%
+    filter(what == party) %>%
+    mutate(mid_date = ymd(mid_date)) %>%
+    filter(mid_date >= start_date & mid_date <= end_date) %>%
+    filter(!is.na(y)) %>%
+    mutate(
+      y   = y / 100,
+      day = as.integer(as.numeric(difftime(mid_date, start_date, units = "days")) + 1L),
+      j   = as.integer(factor(pollster))
+    ) %>%
+    arrange(mid_date)
+
+  if (nrow(filtered_data) == 0) {
+    stop("No valid polling data for given party and year.")
+  }
+
+  # known SE per poll
+  if ("sample" %in% names(filtered_data)) {
+    sig <- with(filtered_data, ifelse(!is.na(sample) & sample > 0,
+                                      sqrt(pmax(y, 1e-6) * pmax(1 - y, 1e-6) / sample),
+                                      fallback_sigma))
+  } else {
+    sig <- rep(fallback_sigma, nrow(filtered_data))
+  }
+
+  NDAYS <- as.integer(as.numeric(difftime(end_date, start_date, units = "days")) + 1L)
+  date_seq <- seq.Date(from = start_date, by = "day", length.out = NDAYS)
+
+
+  if (is.null(break_dates) || length(break_dates) == 0) {
+    auto_breaks <- .detect_jump_dates(start_date, end_date, jump_csv = jump_csv)
+    if (!is.null(auto_breaks)) {
+      break_dates <- auto_breaks
+    }
+  }
+
+
+  disc <- .make_discontinuity(date_seq, break_dates)
+  NBREAKS <- disc$NBREAKS
+  discontinuity <- disc$discontinuity
+
+  data_list <- list(
+    NPOLLS = nrow(filtered_data),
+    NDAYS = NDAYS,
+    NHOUSES = length(unique(filtered_data$j)),
+
+    sigma = as.vector(sig),           
+    y = filtered_data$y,
+    j = filtered_data$j,
+    day = filtered_data$day,
+
+    NBREAKS = NBREAKS,
+    discontinuity = discontinuity,
+
+    prevElectionResult = 0.3473,
+    tau_upper = 0.3
+  )
+
+  fit <- stan(
+    file = stan_file,
+    data = data_list,
+    iter = 6500,
+    warmup = 1500,
+    chains = 4,
+    seed = 123456,
+    control = list(adapt_delta = 0.95)
+  )
+
+  return(list(fit = fit, filtered_data = filtered_data, date_seq = date_seq))
+}
+
+
+xi_summary <- function(fit, start_date) {
+  xi_samples <- rstan::extract(fit)$xi
+  xi_df <- apply(xi_samples, 2, function(x) {
+    tibble(
+      mean = mean(x),
+      q05  = quantile(x, 0.05),
+      q95  = quantile(x, 0.95),
+      q025 = quantile(x, 0.025),
+      q975 = quantile(x, 0.975)
+    )
+  }) %>%
+    bind_rows() %>%
+    mutate(
+      day  = 1:n(),
+      date = start_date + days(day - 1)
+    )
+  return(xi_df)
+}
+
+
+real_data <- read.csv("C:/Users/16438/Desktop/Reaserch Project/Trying NIG model/Task4.2_NIG_real_in_Rstan_u0~U(0.4, 0.6)/comb.s.csv")
+
+result <- run_NIG_trend_house(
+   data       = real_data,
+   party      = "ALP",
+   year       = 2019,
+   start_date = as.Date("2016-07-02"),
+   end_date   = as.Date("2019-05-18"),
+   stan_file  = "/Documents and Settings/16438/Desktop/Reaserch Project/Trying State space model.stan",
+   break_dates = as.Date("2018-08-25"),
+   jump_csv    = NULL
+ )
+
+
+ fit <- result$fit
+ filtered_data <- result$filtered_data
+ xi_df <- xi_summary(fit, start_date = as.Date("2016-07-02"))
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(lubridate)
+library(rstan)
+
+# Time trends
+plot_trend <- function(xi_df, polls_df, party_label = "ALP",
+                       past_result = NULL, this_result = NULL) {
+  g <- ggplot(xi_df, aes(x = date)) +
+
+    geom_ribbon(aes(ymin = q025 * 100, ymax = q975 * 100),
+                fill = "grey80", alpha = 0.6) +
+    geom_line(aes(y = mean * 100), size = 1.2) +
+
+    geom_point(data = polls_df,
+               aes(x = mid_date, y = y),
+               inherit.aes = FALSE, alpha = 0.6, size = 1) +
+    scale_y_continuous("Voting intention (%)", limits = c(NA, NA)) +
+    scale_x_date("", date_breaks = "3 months", date_labels = "%b %y", expand = c(0, 0)) +
+    theme_minimal(base_size = 12) +
+
+  if (!is.null(past_result)) {
+    g <- g + geom_hline(yintercept = past_result, linetype = 2) +
+      annotate("text", x = min(xi_df$date), y = past_result,
+               label = "Previous result", vjust = -0.5, hjust = 0)
+  }
+  if (!is.null(this_result)) {
+    g <- g + geom_hline(yintercept = this_result, linetype = 2) +
+      annotate("text", x = max(xi_df$date), y = this_result,
+               label = "Election result", vjust = -0.5, hjust = 1)
+  }
+  g
+}
+
+g_trend <- plot_trend(
+  xi_df = xi_df,
+  polls_df = filtered_data %>% mutate(y = y * 100),
+  party_label = "ALP"
+)
+print(g_trend)
+```
+
+```{r}
+last_idx <- nrow(xi_df)       
+idx_42 <- last_idx - 1050        
+
+xi_df[c(idx_42, last_idx), c("date", "mean", "q025", "q975")]
+```
+
+```{r}
+end_date   <- max(xi_df$date, na.rm = TRUE)
+start_date <- end_date - lubridate::days(41)
+
+
+xi_last <- xi_df %>% dplyr::filter(date >= start_date & date <= end_date)
+
+polls_last <- filtered_data %>%
+  dplyr::filter(mid_date >= start_date & mid_date <= end_date) %>%
+  dplyr::mutate(y = y * 100)
+
+g_trend_last <- plot_trend(
+  xi_df = xi_last,
+  polls_df = polls_last,
+  party_label = "ALP"
+) +
+  ggplot2::labs(subtitle = paste0("Last 42 days: ",
+                                  format(start_date, "%Y-%m-%d"), " to ",
+                                  format(end_date, "%Y-%m-%d"))) +
+  ggplot2::scale_x_date(date_breaks = "1 week", date_labels = "%d %b")
+
+print(g_trend_last)
+
+```
+
+```{r}
+#  house effects
+
+delta_array <- tryCatch(
+  rstan::extract(fit, pars = "delta")$delta, 
+  error = function(e) NULL
+)
+
+if (is.null(delta_array)) {
+
+  delta_raw_samps <- rstan::extract(fit, pars = "delta_raw")$delta_raw 
+  delta_array <- delta_raw_samps - rowMeans(delta_raw_samps)
+}
+
+delta_summary <- apply(delta_array, 2, function(x) {
+  c(mean = mean(x), lo = quantile(x, 0.05), hi = quantile(x, 0.95))
+}) %>% t() %>% as.data.frame() %>% tibble::rownames_to_column("house_idx")
+
+
+house_levels <- levels(factor(filtered_data$pollster))
+if (length(house_levels) == nrow(delta_summary)) {
+  delta_summary$pollster <- house_levels
+} else {
+
+  map_tbl <- filtered_data %>%
+    distinct(j, pollster) %>%
+    arrange(j)
+  delta_summary <- delta_summary %>%
+    mutate(j = as.integer(house_idx)) %>%
+    left_join(map_tbl, by = c("j" = "j")) %>%
+    mutate(pollster = ifelse(is.na(pollster), paste0("House ", j), pollster))
+}
+
+g_house <- delta_summary %>%
+  mutate(
+    pct = mean * 100,
+    lo  = `lo.5%`  * 100,
+    hi  = `hi.95%` * 100
+  ) %>%
+  arrange(pct) %>%
+  mutate(pollster = factor(pollster, levels = pollster)) %>%
+  ggplot(aes(x = pollster, y = pct)) +
+  geom_hline(yintercept = 0, linetype = 2, color = "grey50") +
+  geom_point() +
+  geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.2) +
+  coord_flip() +
+  labs(x = "", y = "House effect (percentage points)",
+       title = "Pollster house effects",
+       subtitle = "Points = posterior mean(house effect); bars = 5–95% posterior interval") +
+  theme_minimal(base_size = 12)
+
+print(g_house)
+
+
+```
